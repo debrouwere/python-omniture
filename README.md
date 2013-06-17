@@ -66,7 +66,7 @@ It's still early days -- expect some things not to work.
 
     report = network.report \
         .over_time(metrics=['pageviews', 'visitors']) \
-        .range('2013-05-01', '2013-05-31', granularity='month')
+        .range('2013-05-01', '2013-05-31', granularity='month') \
         .sync()
 
 Accessing the data in a report works as follows:

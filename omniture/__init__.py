@@ -23,6 +23,8 @@ class Value(object):
     def __repr__(self):
         return "<{title}: {id}>".format(**self.__dict__)
 
+    def __str__(self):
+        return self.title
 
 class Account(object):
     def __init__(self, endpoint='https://api.omniture.com/admin/1.3/rest/'):
@@ -141,7 +143,7 @@ class Query(object):
         else:
             return value.id
 
-    def range(self, start, stop=None, granularity='day'):
+    def range(self, start, stop=None, granularity=None):
         stop = stop or start
 
         if start == stop:
@@ -152,7 +154,8 @@ class Query(object):
                 'dateTo': stop,
             })
 
-        self.raw['dateGranularity'] = granularity
+        if granularity:
+            self.raw['dateGranularity'] = granularity
 
         return self
 
@@ -179,16 +182,18 @@ class Query(object):
         return self
 
     def ranked(self, metric):
+        self.report = RankedReport
         self.raw['metrics'] = [self._get_key(metric, 'metrics', expand='id')]
-        self.method = 'QueueRanked'
         return self
 
-    def trended(self, metric, element):
-        self.method = 'QueueTrended'
+    def trended(self, metrics, elements):
+        self.report = TrendedReport
+        self.raw['metrics'] = [self._get_key(metric, 'metrics', expand='id') for metric in metrics]
+        self.raw['elements'] = [self._get_key(element, 'elements', expand='id') for element in elements]
         return self
 
     def over_time(self, metrics):
-        self.method = 'QueueOvertime'
+        self.report = OverTimeReport
         self.raw['metrics'] = [self._get_key(metric, 'metrics', expand='id') for metric in metrics]
         return self
 
@@ -197,17 +202,20 @@ class Query(object):
 
     def queue(self):
         q = self.build()
-        self.id = self.suite.request('Report', self.method, q)['reportID']
+        self.id = self.suite.request('Report', self.report.method, q)['reportID']
         return self
 
-    def probe(self, fn, heartbeat=None, interval=1):
-        status = ''
-        while status not in ['done', 'ready']:
+    def probe(self, fn, heartbeat=None, interval=1, soak=False):
+        status = 'not ready'
+        while status == 'not ready':
             if heartbeat:
                 heartbeat()
             time.sleep(interval)
             response = fn()
             status = response['status']
+            
+            if not soak and status not in ['not ready', 'done', 'ready']:
+                raise InvalidReportError(response)
 
         return response
 
@@ -217,11 +225,11 @@ class Query(object):
 
         # this looks clunky, but Omniture sometimes reports a report
         # as ready when it's really not
-        status = lambda: self.suite.request('Report', 'GetStatus', {'reportID': self.id})
-        report = lambda: self.suite.request('Report', 'GetReport', {'reportID': self.id})
-        self.probe(status, heartbeat, interval)
-        response = self.probe(report, heartbeat, interval)
-        return Report(response, self)
+        check_status = lambda: self.suite.request('Report', 'GetStatus', {'reportID': self.id})
+        get_report = lambda: self.suite.request('Report', 'GetReport', {'reportID': self.id})
+        status = self.probe(check_status, heartbeat, interval, soak=True)
+        response = self.probe(get_report, heartbeat, interval)
+        return self.report(response, self)
 
     def async(self, callback=None, heartbeat=None, interval=1):
         if not self.id:
@@ -231,6 +239,27 @@ class Query(object):
 
     def cancel(self):
         return self.suite.request('Report', 'CancelReport', {'reportID': self.id})
+
+
+class InvalidReportError(Exception):
+    def normalize(self, error):
+        if 'error_msg' in error:
+            return {
+                'status': error['status'],
+                'code': error['error_code'],
+                'message': error['error_msg'],
+            }
+        else:
+            return {
+                'status': error['statusMsg'],
+                'code': error['status'],
+                'message': error['statusDesc'],
+            }
+
+    def __init__(self, error):
+        error = self.normalize(error)
+        message = "{status}: {message} ({code})".format(**error)
+        super(InvalidReportError, self).__init__(message)
 
 
 #  TODO: also make this iterable (go through rows)
@@ -255,21 +284,60 @@ class Report(object):
         for column in self.data:
             column.value = []
 
-        for row in report['data']:
-            for i, value in enumerate(row['counts']):
-                if self.metrics[i].type == 'number':
-                    value = float(value)
-                self.data[i].append(value)
-
     def to_dataframe(self):
         import pandas as pd
         raise NotImplementedError()
         # return pd.DataFrame()
 
     def __init__(self, raw, query):
+        #from pprint import pprint
+        #pprint(raw)
+
         self.raw = raw
         self.query = query
         self.process()
+
+    def __repr__(self):
+        info = {
+            'metrics': ", ".join(map(str, self.metrics)), 
+            'elements': ", ".join(map(str, self.elements)), 
+        }
+        return "<omniture.RankedReport (metrics) {metrics} (elements) {elements}>".format(**info)
+
+class OverTimeReport(Report):
+    def process(self):
+        super(OverTimeReport, self).process()
+
+        # TODO: this works for over_time reports and I believe for ranked
+        # reports as well, but trended reports have their data in 
+        # `data.breakdown:[breakdown:[counts]]`
+        for row in self.report['data']:
+            for i, value in enumerate(row['counts']):
+                if self.metrics[i].type == 'number':
+                    value = float(value)
+                self.data[i].append(value)
+
+OverTimeReport.method = 'QueueOvertime'
+
+
+class RankedReport(Report):
+    def process(self):
+        super(RankedReport, self).process()
+
+        for row in self.report['data']:
+            for i, value in enumerate(row['counts']):
+                if self.metrics[i].type == 'number':
+                    value = float(value)
+                self.data[i].append((row['name'], value))
+
+RankedReport.method = 'QueueRanked'
+
+
+class TrendedReport(Report):
+    def process(self):
+        super(TrendedReport, self).process()
+
+TrendedReport.method = 'QueueTrended'
 
 
 def sync(queries, heartbeat=None, interval=1):
