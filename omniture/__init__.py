@@ -26,6 +26,30 @@ class Value(object):
     def __str__(self):
         return self.title
 
+
+class Element(Value):
+    def range(self, *vargs):
+        l = len(vargs)
+        if l == 1:
+            start = 0
+            stop = vargs[0]
+        elif l == 2:
+            start, stop = vargs
+
+        top = stop - start
+
+        self.properties['startingWith'] = str(start)
+        self.properties['top'] = str(top)
+
+    def search(self, type, keywords):
+        raise NotImplementedError()
+
+    def select(self, elements):
+        raise NotImplementedError()
+        # TODO: actually have _get_key available
+        self.properties['selected'] = [self._get_key(element, 'elements', expand='id') for element in elements]
+
+
 class Account(object):
     def __init__(self, endpoint='https://api.omniture.com/admin/1.3/rest/'):
         self.endpoint = endpoint
@@ -197,8 +221,26 @@ class Query(object):
         self.raw['metrics'] = [self._get_key(metric, 'metrics', expand='id') for metric in metrics]
         return self
 
+    def data(self, metrics, breakdowns):
+        self.report = DataWarehouseReport
+        self.raw['metrics'] = [self._get_key(metric, 'metrics', expand='id') for metric in metrics]
+        # TODO: haven't figured out how breakdowns work yet
+        self.raw['breakdowns'] = False
+        return self
+
     def build(self):
-        return {'reportDescription': self.raw}
+        if self.report == DataWarehouseReport:
+            return utils.translate(self.raw, {
+                'metrics': 'Metric_List',
+                'breakdowns': 'Breakdown_List',
+                'dateFrom': 'Date_From',
+                'dateTo': 'Date_To',
+                # is this the correct mapping?
+                'date': 'Date_Preset',
+                'dateGranularity': 'Date_Granularity',
+                })
+        else:
+            return {'reportDescription': self.raw}
 
     def queue(self):
         q = self.build()
@@ -219,6 +261,7 @@ class Query(object):
 
         return response
 
+    # only for SiteCatalyst queries
     def sync(self, heartbeat=None, interval=1):
         if not self.id:
             self.queue()
@@ -231,14 +274,22 @@ class Query(object):
         response = self.probe(get_report, heartbeat, interval)
         return self.report(response, self)
 
+    # only for SiteCatalyst queries
     def async(self, callback=None, heartbeat=None, interval=1):
         if not self.id:
             self.queue()
 
         raise NotImplementedError()
 
+    # only for Data Warehouse queries
+    def request(self, name='python-omniture query', ftp=None, email=None):
+        raise NotImplementedError()
+
     def cancel(self):
-        return self.suite.request('Report', 'CancelReport', {'reportID': self.id})
+        if self.report == DataWarehouseReport:
+            return self.suite.request('DataWarehouse', 'CancelRequest', {'Request_Id': self.id})
+        else:
+            return self.suite.request('Report', 'CancelReport', {'reportID': self.id})
 
 
 class InvalidReportError(Exception):
@@ -338,6 +389,12 @@ class TrendedReport(Report):
         super(TrendedReport, self).process()
 
 TrendedReport.method = 'QueueTrended'
+
+
+class DataWarehouseReport(object):
+    pass
+
+DataWarehouseReport.method = 'Request'
 
 
 def sync(queries, heartbeat=None, interval=1):

@@ -1,3 +1,6 @@
+import copy
+
+
 class memoize:
   def __init__(self, function):
     self.function = function
@@ -34,10 +37,12 @@ class AddressableList(list):
                 raise KeyError("Cannot find {key} among the available {name}".format(
                     key=key, name=self.name))
 
+
 class AddressableDict(AddressableList):
     def __getitem__(self, key):
         item = super(AddressableDict, self).__getitem__(key)
         return item.value
+
 
 def affix(prefix, base, suffix, connector='_'):
     if prefix:
@@ -51,3 +56,14 @@ def affix(prefix, base, suffix, connector='_'):
         suffix = ''
 
     return prefix + base + suffix
+
+
+def translate(d, mapping):
+    d = copy.copy(d)
+
+    for src, dest in mapping.items():
+        if src in d:
+            d[dest] = d[src]
+            del d[src]
+
+    return d
