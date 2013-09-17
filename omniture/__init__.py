@@ -1,6 +1,7 @@
 import requests
 import binascii
 from datetime import datetime
+from copy import copy, deepcopy
 import time
 import sha
 import json
@@ -8,20 +9,29 @@ import utils
 
 
 class Value(object):
-    def __init__(self, title, id, properties={}):
+    def __init__(self, title, id, extra={}):
         self.title = title
         self.id = id
+        self.properties = {'id': id}
 
-        for k, v in properties.items():
+        for k, v in extra.items():
             setattr(self, k, v)
 
     @classmethod
-    def list(self, name, items, title='title', id='id'):
-        values = [Value(item[title], item[id], item) for item in items]
+    def list(cls, name, items, title='title', id='id'):
+        values = [cls(item[title], item[id], item) for item in items]
         return utils.AddressableList(values, name)
 
     def __repr__(self):
         return "<{title}: {id}>".format(**self.__dict__)
+
+    def copy(self):
+        value = self.__class__(self.title, self.id)
+        value.properties = copy(self.properties)
+        return value
+
+    def serialize(self):
+        return self.properties
 
     def __str__(self):
         return self.title
@@ -38,8 +48,11 @@ class Element(Value):
 
         top = stop - start
 
-        self.properties['startingWith'] = str(start)
-        self.properties['top'] = str(top)
+        element = self.copy()
+        element.properties['startingWith'] = str(start)
+        element.properties['top'] = str(top)
+
+        return element
 
     def search(self, type, keywords):
         raise NotImplementedError()
@@ -131,7 +144,7 @@ class Suite(Value):
     @utils.memoize
     def elements(self):
         data = self.request('ReportSuite', 'GetAvailableElements')[0]['available_elements']
-        return Value.list('elements', data, 'display_name', 'element_name')
+        return Element.list('elements', data, 'display_name', 'element_name')
 
     @property
     @utils.memoize
@@ -156,16 +169,21 @@ class Query(object):
         self.raw = {}
         self.id = None
 
-    def _get_key(self, value, category, expand=False):
-        if not isinstance(value, Value):
-            value = getattr(self.suite, category)[value]
-
-        if expand:
-            kv = {}
-            kv[expand] = value.id
-            return kv
+    def _normalize_value(self, value, category):
+        if isinstance(value, Value):
+            return value
         else:
-            return value.id
+            return getattr(self.suite, category)[value]
+
+    def _serialize_value(self, value, category):
+        return self._normalize_value(value, category).serialize()
+
+    def _serialize_values(self, values, category):
+        if not isinstance(values, list):
+            values = [values]
+
+        return [self._serialize_value(value, category) for value in values]
+
 
     def range(self, start, stop=None, granularity=None):
         stop = stop or start
@@ -198,32 +216,39 @@ class Query(object):
 
     def filter(self, segment=None, element=None):
         if segment:
-            self.raw['segment_id'] = self._get_key(segment, 'segments')
+            self.raw['segment_id'] = self._normalize_value(segment, 'segments').id
 
         if element:
             raise NotImplementedError()
 
         return self
 
-    def ranked(self, metric):
+    def ranked(self, metrics, elements):
+        self._serialize_values(metrics, 'metrics')
+
         self.report = RankedReport
-        self.raw['metrics'] = [self._get_key(metric, 'metrics', expand='id')]
+        self.raw['metrics'] = self._serialize_values(metrics, 'metrics')
+        self.raw['elements'] = self._serialize_values(elements, 'elements')
         return self
 
-    def trended(self, metrics, elements):
+    def trended(self, metric, element):
+        if isinstance(metric, list) or isinstance(element, list):
+            raise ValueError("Trended reports can only be generated for one metric and one element.")
+
         self.report = TrendedReport
-        self.raw['metrics'] = [self._get_key(metric, 'metrics', expand='id') for metric in metrics]
-        self.raw['elements'] = [self._get_key(element, 'elements', expand='id') for element in elements]
+        self.raw['metrics'] = self._serialize_values(metric, 'metrics')
+        self.raw['elements'] = self._serialize_values(element, 'elements')
         return self
 
     def over_time(self, metrics):
         self.report = OverTimeReport
-        self.raw['metrics'] = [self._get_key(metric, 'metrics', expand='id') for metric in metrics]
+        self.raw['metrics'] = self._serialize_values(metrics, 'metrics')
         return self
 
+    # TODO: data warehouse reports are a work in progress
     def data(self, metrics, breakdowns):
         self.report = DataWarehouseReport
-        self.raw['metrics'] = [self._get_key(metric, 'metrics', expand='id') for metric in metrics]
+        self.raw['metrics'] = self._serialize_values(metrics, 'metrics')
         # TODO: haven't figured out how breakdowns work yet
         self.raw['breakdowns'] = False
         return self
@@ -379,7 +404,7 @@ class RankedReport(Report):
             for i, value in enumerate(row['counts']):
                 if self.metrics[i].type == 'number':
                     value = float(value)
-                self.data[i].append((row['name'], value))
+                self.data[i].append((row['name'], row['url'], value))
 
 RankedReport.method = 'QueueRanked'
 
