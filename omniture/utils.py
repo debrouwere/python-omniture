@@ -44,6 +44,13 @@ class AddressableDict(AddressableList):
         return item.value
 
 
+def wrap(obj):
+    if isinstance(obj, list):
+        return obj
+    else:
+        return [obj]
+
+
 def affix(prefix, base, suffix, connector='_'):
     if prefix:
         prefix = prefix + connector

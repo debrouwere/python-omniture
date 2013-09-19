@@ -9,24 +9,25 @@ import utils
 
 
 class Value(object):
-    def __init__(self, title, id, extra={}):
+    def __init__(self, title, id, parent, extra={}):
         self.title = title
         self.id = id
+        self.parent = parent
         self.properties = {'id': id}
 
         for k, v in extra.items():
             setattr(self, k, v)
 
     @classmethod
-    def list(cls, name, items, title='title', id='id'):
-        values = [cls(item[title], item[id], item) for item in items]
+    def list(cls, name, items, parent, title='title', id='id'):
+        values = [cls(item[title], item[id], parent, item) for item in items]
         return utils.AddressableList(values, name)
 
     def __repr__(self):
-        return "<{title}: {id}>".format(**self.__dict__)
+        return "<{title}: {id} in {parent}>".format(**self.__dict__)
 
     def copy(self):
-        value = self.__class__(self.title, self.id)
+        value = self.__class__(self.title, self.id, self.parent)
         value.properties = copy(self.properties)
         return value
 
@@ -54,13 +55,28 @@ class Element(Value):
 
         return element
 
-    def search(self, type, keywords):
-        raise NotImplementedError()
+    def search(self, keywords, type='AND'):
+        type = type.upper()
 
-    def select(self, elements):
-        raise NotImplementedError()
-        # TODO: actually have _get_key available
-        self.properties['selected'] = [self._get_key(element, 'elements', expand='id') for element in elements]
+        types = ['AND', 'OR', 'NOT']
+        if type not in types:
+            raise ValueError("Search type should be one of: " + ", ".join(types))
+
+        element = self.copy()
+        element.properties['search'] = {
+            'type': type, 
+            'keywords': utils.wrap(keywords), 
+        }
+        return element
+
+    def select(self, keys):
+        element = self.copy()
+        element.properties['selected'] = utils.wrap(keys)
+        return element
+
+
+class Segment(Element):
+    pass
 
 
 class Account(object):
@@ -130,7 +146,7 @@ class Suite(Value):
         return self.account.request(api, method, raw_query)
 
     def __init__(self, title, id, account):
-        super(Suite, self).__init__(title, id)
+        super(Suite, self).__init__(title, id, account)
 
         self.account = account
 
@@ -138,25 +154,25 @@ class Suite(Value):
     @utils.memoize
     def metrics(self):
         data = self.request('ReportSuite', 'GetAvailableMetrics')[0]['available_metrics']
-        return Value.list('metrics', data, 'display_name', 'metric_name')
+        return Value.list('metrics', data, self, 'display_name', 'metric_name')
 
     @property
     @utils.memoize
     def elements(self):
         data = self.request('ReportSuite', 'GetAvailableElements')[0]['available_elements']
-        return Element.list('elements', data, 'display_name', 'element_name')
+        return Element.list('elements', data, self, 'display_name', 'element_name')
 
     @property
     @utils.memoize
     def evars(self):
         data = self.request('ReportSuite', 'GetEVars')[0]['evars']
-        return Value.list('evars', data, 'name', 'evar_num')
+        return Value.list('evars', data, self, 'name', 'evar_num')
 
     @property
     @utils.memoize
     def segments(self):
         data = self.request('ReportSuite', 'GetSegments')[0]['sc_segments']
-        return Value.list('segments', data, 'name', 'id')
+        return Segment.list('segments', data, self, 'name', 'id')
 
     @property
     def report(self):
@@ -184,6 +200,13 @@ class Query(object):
 
         return [self._serialize_value(value, category) for value in values]
 
+    def _serialize(self, obj):
+        if isinstance(obj, list):
+            return [self._serialize(el) for el in obj]
+        elif isinstance(obj, Value):
+            return obj.serialize()
+        else:
+            return obj
 
     def range(self, start, stop=None, granularity=None):
         stop = stop or start
@@ -191,7 +214,7 @@ class Query(object):
         if start == stop:
             self.raw['date'] = start
         else:
-            self.raw.update({
+            self.raw({
                 'dateFrom': start,
                 'dateTo': stop,
             })
@@ -201,12 +224,24 @@ class Query(object):
 
         return self
 
-    def raw(self, properties):
-        self.raw.update(properties)
-        return self
+    def set(self, key=None, value=None, **kwargs):
+        """
+        `set` is a way to add raw properties to the request, 
+        for features that python-omniture does not support but the 
+        SiteCatalyst API does support. For convenience's sake, 
+        it will serialize Value and Element objects but will 
+        leave any other kind of value alone.
+        """
 
-    def set(self, key, value):
-        self.raw[key] = value
+        if key and value:
+            self.raw[key] = self._serialize(value)
+        elif key or kwargs:
+            properties = key or kwargs
+            for key, value in properties.items():
+                self.raw[key] = self._serialize(value)
+        else:
+            raise ValueError("Query#set requires a key and value, a properties dictionary or keyword arguments.")
+
         return self
 
     def sort(self, facet):
@@ -214,12 +249,16 @@ class Query(object):
         raise NotImplementedError()
         return self
 
-    def filter(self, segment=None, element=None):
-        if segment:
+    def filter(self, segments=None, segment=None):
+        # It would appear to me that 'segment_id' has a strict subset
+        # of the functionality of 'segments', but until I find out for
+        # sure, I'll provide both options.
+        if segments:
+            self.raw['segments'] = self._serialize_values(segments, 'segments')
+        elif segment:
             self.raw['segment_id'] = self._normalize_value(segment, 'segments').id
-
-        if element:
-            raise NotImplementedError()
+        else:
+            raise ValueError()
 
         return self
 
@@ -319,17 +358,19 @@ class Query(object):
 
 class InvalidReportError(Exception):
     def normalize(self, error):
+        print 'error', error
+
         if 'error_msg' in error:
             return {
                 'status': error['status'],
                 'code': error['error_code'],
-                'message': error['error_msg'],
+                'message': error.get('error_msg', ''),
             }
         else:
             return {
                 'status': error['statusMsg'],
                 'code': error['status'],
-                'message': error['statusDesc'],
+                'message': error.get('statusDesc', ''),
             }
 
     def __init__(self, error):
@@ -347,8 +388,8 @@ class Report(object):
             'execution': float(self.raw['runSeconds']),
         }
         self.report = report = self.raw['report']
-        self.metrics = Value.list('metrics', report['metrics'], 'name', 'id')
-        self.elements = Value.list('elements', report['elements'], 'name', 'id')
+        self.metrics = Value.list('metrics', report['metrics'], self.suite, 'name', 'id')
+        self.elements = Value.list('elements', report['elements'], self.suite, 'name', 'id')
         self.period = report['period']
         segment = report['segment_id']
         if len(segment):
@@ -371,6 +412,7 @@ class Report(object):
 
         self.raw = raw
         self.query = query
+        self.suite = query.suite
         self.process()
 
     def __repr__(self):
