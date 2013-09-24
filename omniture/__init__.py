@@ -192,6 +192,8 @@ def immutable(method):
 
 
 class Query(object):
+    GRANULARITY_LEVELS = ['hour', 'day', 'month']
+
     def __init__(self, suite):
         self.suite = suite
         self.raw = {}
@@ -246,6 +248,10 @@ class Query(object):
             })
 
         if granularity:
+            if granularity not in self.GRANULARITY_LEVELS:
+                levels = ", ".join(self.GRANULARITY_LEVELS)
+                raise ValueError("Granularity should be one of: " + levels)
+
             self.raw['dateGranularity'] = granularity
 
         return self
