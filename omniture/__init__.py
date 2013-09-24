@@ -6,6 +6,7 @@ from dateutil.relativedelta import relativedelta
 from copy import copy, deepcopy
 import sha
 import json
+import functools
 import utils
 
 
@@ -180,11 +181,22 @@ class Suite(Value):
         return Query(self)
 
 
+def immutable(method):
+    @functools.wraps(method)
+    def wrapped_method(self, *vargs, **kwargs):
+        obj = self.clone()
+        method(obj, *vargs, **kwargs)
+        return obj
+
+    return wrapped_method
+
+
 class Query(object):
     def __init__(self, suite):
         self.suite = suite
         self.raw = {}
         self.id = None
+        self.report = None
 
     def _normalize_value(self, value, category):
         if isinstance(value, Value):
@@ -209,6 +221,13 @@ class Query(object):
         else:
             return obj
 
+    def clone(self):
+        query = Query(self.suite)
+        query.raw = copy(self.raw)
+        query.report = self.report
+        return query
+
+    @immutable
     def range(self, start, stop=None, months=0, days=0, granularity=None):
         start = utils.date(start)
         stop = utils.date(stop)
@@ -231,6 +250,7 @@ class Query(object):
 
         return self
 
+    @immutable
     def set(self, key=None, value=None, **kwargs):
         """
         `set` is a way to add raw properties to the request, 
@@ -251,11 +271,13 @@ class Query(object):
 
         return self
 
+    @immutable
     def sort(self, facet):
         #self.raw['sortBy'] = facet
         raise NotImplementedError()
         return self
 
+    @immutable
     def filter(self, segments=None, segment=None):
         # It would appear to me that 'segment_id' has a strict subset
         # of the functionality of 'segments', but until I find out for
@@ -269,6 +291,7 @@ class Query(object):
 
         return self
 
+    @immutable
     def ranked(self, metrics, elements):
         self._serialize_values(metrics, 'metrics')
 
@@ -277,6 +300,7 @@ class Query(object):
         self.raw['elements'] = self._serialize_values(elements, 'elements')
         return self
 
+    @immutable
     def trended(self, metric, element):
         if isinstance(metric, list) or isinstance(element, list):
             raise ValueError("Trended reports can only be generated for one metric and one element.")
@@ -286,12 +310,14 @@ class Query(object):
         self.raw['elements'] = self._serialize_values(element, 'elements')
         return self
 
+    @immutable
     def over_time(self, metrics):
         self.report = OverTimeReport
         self.raw['metrics'] = self._serialize_values(metrics, 'metrics')
         return self
 
     # TODO: data warehouse reports are a work in progress
+    @immutable
     def data(self, metrics, breakdowns):
         self.report = DataWarehouseReport
         self.raw['metrics'] = self._serialize_values(metrics, 'metrics')
