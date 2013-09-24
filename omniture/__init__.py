@@ -1,8 +1,9 @@
 import requests
 import binascii
-from datetime import datetime
-from copy import copy, deepcopy
 import time
+from datetime import datetime
+from dateutil.relativedelta import relativedelta
+from copy import copy, deepcopy
 import sha
 import json
 import utils
@@ -208,15 +209,21 @@ class Query(object):
         else:
             return obj
 
-    def range(self, start, stop=None, granularity=None):
-        stop = stop or start
+    def range(self, start, stop=None, months=0, days=0, granularity=None):
+        start = utils.date(start)
+        stop = utils.date(stop)
+
+        if days or months:
+            stop = start + relativedelta(days=days-1, months=months)
+        else:
+            stop = stop or start
 
         if start == stop:
-            self.raw['date'] = start
+            self.raw['date'] = start.isoformat()
         else:
-            self.raw({
-                'dateFrom': start,
-                'dateTo': stop,
+            self.raw.update({
+                'dateFrom': start.isoformat(),
+                'dateTo': stop.isoformat(),
             })
 
         if granularity:
@@ -405,6 +412,18 @@ class Report(object):
         import pandas as pd
         raise NotImplementedError()
         # return pd.DataFrame()
+
+    def serialize(self, verbose=False):
+        if verbose:
+            facet = 'title'
+        else:
+            facet = 'id'
+
+        d = {}
+        for el in self.data:
+            key = getattr(el, facet)
+            d[key] = el.value
+        return d
 
     def __init__(self, raw, query):
         #from pprint import pprint

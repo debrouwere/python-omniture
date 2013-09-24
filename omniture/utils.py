@@ -1,5 +1,6 @@
 import copy
-
+import datetime
+from dateutil.parser import parse as parse_date
 
 class memoize:
   def __init__(self, function):
@@ -42,6 +43,20 @@ class AddressableDict(AddressableList):
     def __getitem__(self, key):
         item = super(AddressableDict, self).__getitem__(key)
         return item.value
+
+
+def date(obj):
+    if obj is None:
+        return None
+    elif isinstance(obj, datetime.date):
+        if hasattr(dt, 'date'):
+            return obj.date()
+        else:
+            return obj
+    elif isinstance(obj, basestring):
+        return parse_date(obj).date()
+    else:
+        raise ValueError("Can only convert strings into dates, received {}".format(obj.__class__))
 
 
 def wrap(obj):
