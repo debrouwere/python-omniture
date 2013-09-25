@@ -54,6 +54,15 @@ human-readable name or their id. So for example `suite.segments['pageviews']` an
 
 `python-omniture` can run ranked, trended and "over time" reports
 
+Here's a quick example: 
+
+    report = network.report \
+        .over_time(metrics=['pageviews', 'visitors']) \
+        .range('2013-05-01', '2013-05-31', granularity='month') \
+        .sync()
+
+Some basic features of the three kinds of reports you can run: 
+
 * over_time
   * supports multiple metrics but only one element: time
   * useful if you need information on a per-page basis
@@ -65,11 +74,6 @@ human-readable name or their id. So for example `suite.segments['pageviews']` an
 * trended
   * movement of a single element and metric over time (e.g. visits to world news over time)
   * supports hourly reporting (and up)
-
-    report = network.report \
-        .over_time(metrics=['pageviews', 'visitors']) \
-        .range('2013-05-01', '2013-05-31', granularity='month') \
-        .sync()
 
 Accessing the data in a report works as follows:
 

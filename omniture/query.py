@@ -3,6 +3,7 @@
 import time
 from copy import copy
 import functools
+from dateutil.relativedelta import relativedelta
 from elements import Value, Element, Segment
 import reports
 import utils
