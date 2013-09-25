@@ -516,7 +516,15 @@ DataWarehouseReport.method = 'Request'
 
 
 def sync(queries, heartbeat=None, interval=1):
-    for query in queries:
-        query.queue()
-
-    return [query.sync(heartbeat, interval) for query in queries]
+    if isinstance(queries, list):
+        for query in queries:
+            query.queue()
+        return [query.sync(heartbeat, interval) for query in queries]
+    elif isinstance(queries, dict):
+        for query in queries.values():
+            query.queue()
+        return {key: query.sync(heartbeat, interval) for key, query in queries.items()}
+    else:
+        message = "Queries should be a list or a dictionary, received: {}".format(
+            queries.__class__)
+        raise ValueError(message)
